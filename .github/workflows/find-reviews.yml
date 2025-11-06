@@ -1,9 +1,9 @@
 name: Find My Review Requests
 
 on:
-  workflow_dispatch: # Actionsタブから手動で実行できるようにする
+  workflow_dispatch:
   # schedule:
-  #   - cron: '0 1 * * *' # 毎日 AM 1:00 (UTC) に定期実行する場合
+  #   - cron: '0 1 * * *'
 
 jobs:
   find-requests:
@@ -13,50 +13,58 @@ jobs:
       contents: read
 
     steps:
-      - name: Get PR list
-        id: get_prs # ★ 後続ステップから参照するためのID
+      - name: Get PR list and build payload
+        id: get_prs # ステップID
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          TARGET_REPO: 'Opentrons/opentrons' # ★検索対象のリポジトリ
-          MY_USERNAME: 'koji' # ★あなたのGitHubユーザー名
+          TARGET_REPO: 'Opentrons/opentrons'
+          MY_USERNAME: 'koji'
         run: |
           echo "Searching for PRs in ${{ env.TARGET_REPO }} requesting review from ${{ env.MY_USERNAME }}..."
 
-          # gh search prsでリストを取得し、Slackのmrkdwn形式に整形
+          # PRリストをSlackのmrkdwn形式で取得 (変更なし)
           PR_LIST=$(gh search prs --repo ${{ env.TARGET_REPO }} --state=open --review-requested=${{ env.MY_USERNAME }} \
             --json number,title,url \
-            --jq '.[] | "- <\(.url)|#\(.number): \(.title)>"') # ★ Slackのリンク形式 <URL|Text>
+            --jq '.[] | "- <\(.url)|#\(.number): \(.title)>"')
             
-          # 結果をチェック
+          # 本文 (BODY) を構築 (変更なし)
           if [ -z "$PR_LIST" ]; then
             echo "No matching PRs found."
-            # ★ 0件だった場合のメッセージをStep Outputに設定
-            echo "pr_body=✅ No review requests found for @${{ env.MY_USERNAME }} in ${{ env.TARGET_REPO }}." >> $GITHUB_OUTPUT
+            BODY="✅ No review requests found for @${{ env.MY_USERNAME }} in ${{ env.TARGET_REPO }}."
             echo "has_prs=false" >> $GITHUB_OUTPUT
           else
             echo "Found PRs:"
             echo "$PR_LIST"
-            
-            # ★ Slackに送る本文をStep Outputに設定 (複数行)
-            {
-              echo "pr_body<<EOF"
-              echo "🔔 **Review Requests for @${{ env.MY_USERNAME }} in ${{ env.TARGET_REPO }}**"
-              echo ""
-              echo "$PR_LIST"
-              echo "EOF"
-            } >> $GITHUB_OUTPUT
+            # printfでBODY変数に本文を格納 (改行を含む)
+            printf -v BODY "🔔 **Review Requests for @%s in %s**\n\n%s" \
+              "${{ env.MY_USERNAME }}" \
+              "${{ env.TARGET_REPO }}" \
+              "$PR_LIST"
             echo "has_prs=true" >> $GITHUB_OUTPUT
           fi
 
-      # --- ↓ ここから下を追加 ↓ ---
+          # --- ▼ ここから修正 ▼ ---
+
+          # ★ BODY変数の内容を 'text' の値として持つ、完全なJSONペイロードを生成
+          # jq -n: 入力なしで実行
+          # --arg var "$BODY": シェル変数 $BODY を jq の $var 変数として渡す
+          # '{"text": $var}': JSON を構築 (この時 $var の中の改行は "\n" にエスケープされる)
+          SLACK_PAYLOAD=$(jq -n --arg var "$BODY" '{"text": $var}')
+
+          # ★ 生成した JSON 全体を 'slack_payload' という output に設定
+          # GITHUB_OUTPUT に設定する際、改行が含まれないように1行で出力します
+          echo "slack_payload=${SLACK_PAYLOAD}" >> $GITHUB_OUTPUT
+
+          # (デバッグ用) 生成されたペイロードをログに出力
+          echo "Generated Payload: ${SLACK_PAYLOAD}"
+
+      # --- ▼ ここを修正 ▼ ---
       - name: Send Slack Notification
         uses: slackapi/slack-github-action@v1
         with:
-          # Step "get_prs" の "pr_body" output をペイロードとして使用
-          payload: |
-            {
-              "text": "${{ steps.get_prs.outputs.pr_body }}"
-            }
+          # ★ "get_prs" ステップの "slack_payload" output をペイロードとしてそのまま使用
+          # これにより、YAMLの複数行構文 '|' が不要になります
+          payload: ${{ steps.get_prs.outputs.slack_payload }}
         env:
-          # ★ Step 2 で設定した Secret を参照
+          # ★ secrets.SLACK_WEBHOOK_URL を参照 (変更なし)
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
