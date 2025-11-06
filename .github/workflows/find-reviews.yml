@@ -1,9 +1,10 @@
 name: Find My Review Requests
 
 on:
-  workflow_dispatch:
-  # schedule:
-  #   - cron: '0 1 * * *'
+  workflow_dispatch: {}
+  schedule:
+    # schedule: 6:00 EST (11:00 UTC)
+    - cron: '0 11 * * *'
 
 jobs:
   find-requests:
