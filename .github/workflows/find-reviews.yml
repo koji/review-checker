@@ -23,7 +23,7 @@ jobs:
       - name: List PRs requesting my review
         env:
           # GitHub CLIの認証には自動的に提供されるGITHUB_TOKENを使います
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
           # --- 以下の2つの変数を変更してください ---
           TARGET_REPO: 'Opentrons/opentrons' # ★検索対象のリポジトリ (例: 'octocat/Spoon-Knife')
