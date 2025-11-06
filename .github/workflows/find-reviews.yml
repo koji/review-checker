@@ -8,41 +8,55 @@ on:
 jobs:
   find-requests:
     runs-on: ubuntu-latest
-
-    # 必要なパーミッションを設定します
-    # gh search prs を使うには pull-requests: read が推奨されます
     permissions:
       pull-requests: read
-      contents: read # actions/checkout のため (この例では必須ではない)
+      contents: read
 
     steps:
-      # (オプション) コードをチェックアウトする場合
-      # - name: Checkout code
-      #   uses: actions/checkout@v4
-
-      - name: List PRs requesting my review
+      - name: Get PR list
+        id: get_prs # ★ 後続ステップから参照するためのID
         env:
-          # GitHub CLIの認証には自動的に提供されるGITHUB_TOKENを使います
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-
-          # --- 以下の2つの変数を変更してください ---
-          TARGET_REPO: 'Opentrons/opentrons' # ★検索対象のリポジトリ (例: 'octocat/Spoon-Knife')
+          TARGET_REPO: 'Opentrons/opentrons' # ★検索対象のリポジトリ
           MY_USERNAME: 'koji' # ★あなたのGitHubユーザー名
-          # ----------------------------------------
-
         run: |
           echo "Searching for PRs in ${{ env.TARGET_REPO }} requesting review from ${{ env.MY_USERNAME }}..."
 
-          # gh search prs コマンドで検索を実行
-          # --state=open: オープンなPRのみ対象
-          # --review-requested=${{ env.MY_USERNAME }}: 指定したユーザーにレビューリクエストが来ているもの
-          gh search prs --repo ${{ env.TARGET_REPO }} --state=open --review-requested=${{ env.MY_USERNAME }}
-
-          echo "---"
-
-          # (オプション) もし結果をJSONで取得し、整形して表示したい場合
-          echo "Formatted list:"
-          gh search prs --repo ${{ env.TARGET_REPO }} --state=open --review-requested=${{ env.MY_USERNAME }} \
+          # gh search prsでリストを取得し、Slackのmrkdwn形式に整形
+          PR_LIST=$(gh search prs --repo ${{ env.TARGET_REPO }} --state=open --review-requested=${{ env.MY_USERNAME }} \
             --json number,title,url \
-            --jq '.[] | "#\(.number): \(.title) - \(.url)"' \
-            || echo "No matching PRs found."
+            --jq '.[] | "- <\(.url)|#\(.number): \(.title)>"') # ★ Slackのリンク形式 <URL|Text>
+            
+          # 結果をチェック
+          if [ -z "$PR_LIST" ]; then
+            echo "No matching PRs found."
+            # ★ 0件だった場合のメッセージをStep Outputに設定
+            echo "pr_body=✅ No review requests found for @${{ env.MY_USERNAME }} in ${{ env.TARGET_REPO }}." >> $GITHUB_OUTPUT
+            echo "has_prs=false" >> $GITHUB_OUTPUT
+          else
+            echo "Found PRs:"
+            echo "$PR_LIST"
+            
+            # ★ Slackに送る本文をStep Outputに設定 (複数行)
+            {
+              echo "pr_body<<EOF"
+              echo "🔔 **Review Requests for @${{ env.MY_USERNAME }} in ${{ env.TARGET_REPO }}**"
+              echo ""
+              echo "$PR_LIST"
+              echo "EOF"
+            } >> $GITHUB_OUTPUT
+            echo "has_prs=true" >> $GITHUB_OUTPUT
+          fi
+
+      # --- ↓ ここから下を追加 ↓ ---
+      - name: Send Slack Notification
+        uses: slackapi/slack-github-action@v1
+        with:
+          # Step "get_prs" の "pr_body" output をペイロードとして使用
+          payload: |
+            {
+              "text": "${{ steps.get_prs.outputs.pr_body }}"
+            }
+        env:
+          # ★ Step 2 で設定した Secret を参照
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
