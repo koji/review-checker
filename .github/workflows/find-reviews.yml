@@ -1,0 +1,48 @@
+name: Find My Review Requests
+
+on:
+  workflow_dispatch: # Actionsタブから手動で実行できるようにする
+  # schedule:
+  #   - cron: '0 1 * * *' # 毎日 AM 1:00 (UTC) に定期実行する場合
+
+jobs:
+  find-requests:
+    runs-on: ubuntu-latest
+
+    # 必要なパーミッションを設定します
+    # gh search prs を使うには pull-requests: read が推奨されます
+    permissions:
+      pull-requests: read
+      contents: read # actions/checkout のため (この例では必須ではない)
+
+    steps:
+      # (オプション) コードをチェックアウトする場合
+      # - name: Checkout code
+      #   uses: actions/checkout@v4
+
+      - name: List PRs requesting my review
+        env:
+          # GitHub CLIの認証には自動的に提供されるGITHUB_TOKENを使います
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          # --- 以下の2つの変数を変更してください ---
+          TARGET_REPO: 'Opentrons/opentrons' # ★検索対象のリポジトリ (例: 'octocat/Spoon-Knife')
+          MY_USERNAME: 'koji' # ★あなたのGitHubユーザー名
+          # ----------------------------------------
+
+        run: |
+          echo "Searching for PRs in ${{ env.TARGET_REPO }} requesting review from ${{ env.MY_USERNAME }}..."
+
+          # gh search prs コマンドで検索を実行
+          # --state=open: オープンなPRのみ対象
+          # --review-requested=${{ env.MY_USERNAME }}: 指定したユーザーにレビューリクエストが来ているもの
+          gh search prs --repo ${{ env.TARGET_REPO }} --state=open --review-requested=${{ env.MY_USERNAME }}
+
+          echo "---"
+
+          # (オプション) もし結果をJSONで取得し、整形して表示したい場合
+          echo "Formatted list:"
+          gh search prs --repo ${{ env.TARGET_REPO }} --state=open --review-requested=${{ env.MY_USERNAME }} \
+            --json number,title,url \
+            --jq '.[] | "#\(.number): \(.title) - \(.url)"' \
+            || echo "No matching PRs found."
