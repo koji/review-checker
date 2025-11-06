@@ -22,12 +22,10 @@ jobs:
         run: |
           echo "Searching for PRs in ${{ env.TARGET_REPO }} requesting review from ${{ env.MY_USERNAME }}..."
 
-          # PRリストをSlackのmrkdwn形式で取得 (変更なし)
           PR_LIST=$(gh search prs --repo ${{ env.TARGET_REPO }} --state=open --review-requested=${{ env.MY_USERNAME }} \
             --json number,title,url \
             --jq '.[] | "- <\(.url)|#\(.number): \(.title)>"')
             
-          # 本文 (BODY) を構築 (変更なし)
           if [ -z "$PR_LIST" ]; then
             echo "No matching PRs found."
             BODY="✅ No review requests found for @${{ env.MY_USERNAME }} in ${{ env.TARGET_REPO }}."
@@ -35,7 +33,6 @@ jobs:
           else
             echo "Found PRs:"
             echo "$PR_LIST"
-            # printfでBODY変数に本文を格納 (改行を含む)
             printf -v BODY "🔔 **Review Requests for @%s in %s**\n\n%s" \
               "${{ env.MY_USERNAME }}" \
               "${{ env.TARGET_REPO }}" \
@@ -43,20 +40,12 @@ jobs:
             echo "has_prs=true" >> $GITHUB_OUTPUT
           fi
 
-          # --- ▼ ここから修正 ▼ ---
+          # ★★★ -c オプションを追加してJSONを1行にする ★★★
+          SLACK_PAYLOAD=$(jq -cn --arg var "$BODY" '{"text": $var}')
 
-          # ★ BODY変数の内容を 'text' の値として持つ、完全なJSONペイロードを生成
-          # jq -n: 入力なしで実行
-          # --arg var "$BODY": シェル変数 $BODY を jq の $var 変数として渡す
-          # '{"text": $var}': JSON を構築 (この時 $var の中の改行は "\n" にエスケープされる)
-          SLACK_PAYLOAD=$(jq -n --arg var "$BODY" '{"text": $var}')
-
-          # ★ 生成した JSON 全体を 'slack_payload' という output に設定
-          # GITHUB_OUTPUT に設定する際、改行が含まれないように1行で出力します
           echo "slack_payload=${SLACK_PAYLOAD}" >> $GITHUB_OUTPUT
 
-          # (デバッグ用) 生成されたペイロードをログに出力
-          echo "Generated Payload: ${SLACK_PAYLOAD}"
+          echo "Generated Payload (compact): ${SLACK_PAYLOAD}"
 
       # --- ▼ ここを修正 ▼ ---
       - name: Send Slack Notification
