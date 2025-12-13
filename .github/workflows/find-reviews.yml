@@ -14,8 +14,8 @@ jobs:
       contents: read
 
     steps:
-      - name: Get PR list and build payload
-        id: get_prs # ステップID
+      - name: Get PR list and build payloads
+        id: get_prs
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           TARGET_REPO: 'Opentrons/opentrons'
@@ -23,38 +23,88 @@ jobs:
         run: |
           echo "Searching for PRs in ${{ env.TARGET_REPO }} requesting review from ${{ env.MY_USERNAME }}..."
 
-          PR_LIST=$(gh search prs --repo ${{ env.TARGET_REPO }} --state=open --review-requested=${{ env.MY_USERNAME }} \
-            --json number,title,url \
-            --jq '.[] | "- <\(.url)|#\(.number): \(.title)>"')
-            
-          if [ -z "$PR_LIST" ]; then
+          # まずはJSON配列として取得（[] or [{number,title,url}, ...]）
+          PR_JSON=$(gh search prs \
+            --repo "${{ env.TARGET_REPO }}" \
+            --state open \
+            --review-requested "${{ env.MY_USERNAME }}" \
+            --json number,title,url)
+
+          PR_COUNT=$(echo "$PR_JSON" | jq 'length')
+
+          if [ "$PR_COUNT" -eq 0 ]; then
             echo "No matching PRs found."
             BODY="✅ No review requests found for @${{ env.MY_USERNAME }} in ${{ env.TARGET_REPO }}."
             echo "has_prs=false" >> $GITHUB_OUTPUT
           else
-            echo "Found PRs:"
-            echo "$PR_LIST"
+            echo "Found $PR_COUNT PR(s)."
+            PR_LIST_SLACK=$(echo "$PR_JSON" | jq -r '.[] | "- <\(.url)|#\(.number): \(.title)>"')
             printf -v BODY "🔔 **Review Requests for @%s in %s**\n\n%s" \
               "${{ env.MY_USERNAME }}" \
               "${{ env.TARGET_REPO }}" \
-              "$PR_LIST"
+              "$PR_LIST_SLACK"
             echo "has_prs=true" >> $GITHUB_OUTPUT
           fi
 
-          # ★★★ -c オプションを追加してJSONを1行にする ★★★
+          # Slack payload（今まで通り）
           SLACK_PAYLOAD=$(jq -cn --arg var "$BODY" '{"text": $var}')
-
           echo "slack_payload=${SLACK_PAYLOAD}" >> $GITHUB_OUTPUT
 
-          echo "Generated Payload (compact): ${SLACK_PAYLOAD}"
+          # Discord Embed payload
+          # - fieldsは最大25個に制限（Discord仕様）
+          # - 各field: name="#123", value="[title](url)"
+          DISCORD_PAYLOAD=$(echo "$PR_JSON" | jq -c \
+            --arg user "${{ env.MY_USERNAME }}" \
+            --arg repo "${{ env.TARGET_REPO }}" \
+            --arg ts "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+            '
+            (.[0:25] | map({
+              name: ("#" + (.number|tostring)),
+              value: ("[" + (.title|tostring) + "](" + (.url|tostring) + ")"),
+              inline: false
+            })) as $fields
+            |
+            if (length == 0) then
+              {
+                embeds: [{
+                  title: "✅ No review requests",
+                  description: ("No review requests found for @" + $user + " in " + $repo + "."),
+                  footer: { text: $repo },
+                  timestamp: $ts
+                }]
+              }
+            else
+              {
+                embeds: [{
+                  title: ("🔔 Review Requests for @" + $user),
+                  description: ("Repository: **" + $repo + "**\nOpen PRs requesting your review: **" + (length|tostring) + "**" +
+                                (if (length > 25) then "\n\n(Showing first 25)" else "" end)),
+                  fields: $fields,
+                  footer: { text: $repo },
+                  timestamp: $ts
+                }]
+              }
+            end
+            ')
 
-      # --- ▼ ここを修正 ▼ ---
+          echo "discord_payload=${DISCORD_PAYLOAD}" >> $GITHUB_OUTPUT
+
+          echo "Generated Slack payload: ${SLACK_PAYLOAD}"
+          echo "Generated Discord payload: ${DISCORD_PAYLOAD}"
+
       - name: Send Slack Notification
         uses: slackapi/slack-github-action@v1
         with:
-          # ★ "get_prs" ステップの "slack_payload" output をペイロードとしてそのまま使用
-          # これにより、YAMLの複数行構文 '|' が不要になります
           payload: ${{ steps.get_prs.outputs.slack_payload }}
         env:
-          # ★ secrets.SLACK_WEBHOOK_URL を参照 (変更なし)
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Send Discord Notification (Embed)
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_PAYLOAD: ${{ steps.get_prs.outputs.discord_payload }}
+        run: |
+          curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -d "$DISCORD_PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL"
